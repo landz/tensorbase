@@ -143,6 +143,7 @@ impl Future for BaseSrvConn {
 
 #[actix_rt::main]
 async fn main() -> io::Result<()> {
+    // env::set_var("BASE_DBG_CONF_OVERRIDE", "/jin/tensorbase/ws/base.conf");
     let enable_dbg_log = match env::var("enable_dbg_log") {
         Ok(_v) => true,
         Err(_e) => false,

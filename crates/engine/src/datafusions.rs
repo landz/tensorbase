@@ -2,21 +2,17 @@ use std::{collections::HashSet, lazy::SyncLazy, sync::Arc};
 
 use arrow::{
     array::{
-        ArrayData, ArrayRef, Int8Array, Int16Array, Int32Array,
-        Int64Array, Timestamp32Array, UInt8Array, UInt16Array, 
-        UInt32Array, UInt64Array, DecimalArray,
+        ArrayData, ArrayRef, DecimalArray, GenericStringArray, Int8Array,
+        Int16Array, Int32Array, Int64Array, Timestamp32Array, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array,
     },
     buffer::Buffer,
-    datatypes::{
-        DataType, Field, Schema, 
-    },
+    datatypes::{DataType, Field, Schema},
     ffi::FFI_ArrowArray,
     record_batch::RecordBatch,
 };
 use datafusion::{
-    datasource::MemTable,
-    error::Result,
-    prelude::ExecutionContext,
+    datasource::MemTable, error::Result, prelude::ExecutionContext,
 };
 use meta::{
     store::{
@@ -47,7 +43,7 @@ fn btype_to_arrow_type(typ: BqlType) -> EngineResult<DataType> {
         BqlType::Int(bits) if bits == 64 => Ok(DataType::Int64),
         BqlType::DateTime => Ok(DataType::Timestamp32(None)),
         BqlType::Decimal(p, s) => Ok(DataType::Decimal(p as usize, s as usize)),
-        // BqlType::String => Ok(DataType::Utf8),
+        BqlType::String => Ok(DataType::LargeUtf8),
         _ => Err(EngineError::UnsupportedBqlType),
     }
 }
@@ -147,16 +143,7 @@ fn setup_tables(
             let copa = &copass[j];
             let cpi = &copa[i];
             let typ = btype_to_arrow_type(cis[j].1)?;
-            let dummy = Arc::new(FFI_ArrowArray::empty());
-            let buf = unsafe {
-                let ptr = std::ptr::NonNull::new(cpi.addr as *mut u8)
-                    .ok_or(EngineError::UnwrapOptionError)?;
-                Buffer::from_unowned(ptr, cpi.len_in_bytes, dummy)
-            };
-            let data = ArrayData::builder(typ.clone())
-                .len(cpi.size)
-                .add_buffer(buf)
-                .build();
+            let data = gen_arrow_arraydata(cpi, &typ)?;
             match typ {
                 DataType::Int8 => {
                     cols.push(Arc::new(Int8Array::from(data)));
@@ -185,6 +172,12 @@ fn setup_tables(
                 DataType::Timestamp32(_) => {
                     cols.push(Arc::new(Timestamp32Array::from(data)));
                 }
+                DataType::Decimal(_, _) => {
+                    cols.push(Arc::new(DecimalArray::from(data)));
+                }
+                DataType::LargeUtf8 => {
+                    cols.push(Arc::new(GenericStringArray::<i64>::from(data)));
+                }
                 // DataType::Null => {}
                 // DataType::Boolean => {}
                 // DataType::Float16 => {}
@@ -200,16 +193,12 @@ fn setup_tables(
                 // DataType::FixedSizeBinary(_) => {}
                 // DataType::LargeBinary => {}
                 // DataType::Utf8 => {}
-                // DataType::LargeUtf8 => {}
                 // DataType::List(_) => {}
                 // DataType::FixedSizeList(_, _) => {}
                 // DataType::LargeList(_) => {}
                 // DataType::Struct(_) => {}
                 // DataType::Union(_) => {}
                 // DataType::Dictionary(_, _) => {}
-                DataType::Decimal(_, _) => {
-                    cols.push(Arc::new(DecimalArray::from(data)));
-                }
                 _ => return Err(EngineError::UnsupportedBqlType),
             }
         }
@@ -223,6 +212,37 @@ fn setup_tables(
     )?;
 
     Ok(())
+}
+
+fn gen_arrow_arraydata(
+    cpi: &CoPaInfo,
+    typ: &DataType,
+) -> EngineResult<ArrayData> {
+    let dummy = Arc::new(FFI_ArrowArray::empty());
+    let buf = unsafe {
+        let ptr = std::ptr::NonNull::new(cpi.addr as *mut u8)
+            .ok_or(EngineError::UnwrapOptionError)?;
+        Buffer::from_unowned(ptr, cpi.len_in_bytes, dummy)
+    };
+    let data = if matches!(typ, DataType::LargeUtf8) {
+        let dummy_om = Arc::new(FFI_ArrowArray::empty());
+        let buf_om = unsafe {
+            let ptr = std::ptr::NonNull::new(cpi.addr_om as *mut u8)
+                .ok_or(EngineError::UnwrapOptionError)?;
+            Buffer::from_unowned(ptr, CoPaInfo::len_in_bytes_om(cpi.size), dummy_om)
+        };
+        ArrayData::builder(typ.clone())
+            .len(cpi.size)
+            .add_buffer(buf_om)
+            .add_buffer(buf)
+            .build()
+    } else {
+        ArrayData::builder(typ.clone())
+            .len(cpi.size)
+            .add_buffer(buf)
+            .build()
+    };
+    Ok(data)
 }
 
 #[cfg(test)]
