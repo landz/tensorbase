@@ -24,7 +24,7 @@ jobs:
     - name: TensorBase Run server
       run: |
            mkdir ${{ github.workspace }}/tb_data
-           cargo run --bin server -- -s "$BASE_CONF"
+           nohup cargo run --bin server -- -s "$BASE_CONF" > /dev/null 2>&1 &
       env:
           BASE_CONF: |
             [system]                  
